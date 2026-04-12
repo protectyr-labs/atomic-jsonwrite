@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atomic-jsonwrite"
+version = "0.1.0"
+description = "Crash-safe JSON persistence with fsync + atomic replace"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [{name = "Alexander Madaniev"}]
+keywords = ["json", "atomic", "write", "fsync", "crash-safe"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
