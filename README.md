@@ -1,98 +1,76 @@
 # atomic-jsonwrite
 
-Crash-safe JSON persistence with `fsync` + atomic replace. Works on Windows (NTFS) and POSIX.
+> JSON writes that survive crashes.
 
-## Why This Exists
+[![CI](https://github.com/protectyr-labs/atomic-jsonwrite/actions/workflows/ci.yml/badge.svg)](https://github.com/protectyr-labs/atomic-jsonwrite/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.9+-3776AB.svg)](https://python.org)
 
-We kept losing state files in a multi-agent pipeline when processes crashed mid-write.
-Standard `json.dump()` can leave a corrupt or empty file if the process dies between
-opening the file and finishing the write. This library guarantees that the target file
-is either the old version or the complete new version — never a partial write.
-
-## Demo
-
-```
-$ python examples/basic_usage.py
-Written to: /tmp/.../state/app.json
-Read back: {'_written_at': '2026-04-12T18:30:00+00:00', 'version': 3, 'users_online': 42, 'features': {'dark_mode': True, 'beta': False}}
-Written at: 2026-04-12T18:30:00+00:00
-Updated version: 4
-Clean (no metadata): {'pure': 'data'}
-Missing file returns: None
-```
-
-## Concurrent Safety
-
-`atomic_write` is safe to call from multiple threads or processes targeting the
-same file. Each call writes to its own temporary file, then atomically replaces
-the target. You never get a partial or corrupt read.
-
-```python
-import threading
-from atomic_jsonwrite import atomic_write, atomic_read
-
-def writer(path, thread_id, iterations=100):
-    for i in range(iterations):
-        atomic_write(path, {"thread": thread_id, "seq": i})
-
-path = "shared_state.json"
-threads = [threading.Thread(target=writer, args=(path, t)) for t in range(4)]
-for t in threads:
-    t.start()
-for t in threads:
-    t.join()
-
-# Final state is always a complete, valid JSON document
-# written by whichever thread won the last os.replace()
-data = atomic_read(path)
-print(data)  # e.g. {'_written_at': '...', 'thread': 2, 'seq': 99}
-```
-
-## Install
-
-```bash
-pip install git+https://github.com/protectyr-labs/atomic-jsonwrite.git
-```
+`json.dump()` can leave a corrupt file if the process dies mid-write. This writes to a temp file, fsyncs to disk, and atomically replaces the target. The file is always valid JSON or the previous version -- never partial.
 
 ## Quick Start
 
+```bash
+pip install atomic-jsonwrite
+```
+
 ```python
 from atomic_jsonwrite import atomic_write, atomic_read
 
-# Safe even if the process crashes mid-write
 atomic_write("state/config.json", {"version": 3, "debug": True})
+# => writes temp file, fsync, os.replace -- crash-safe
 
-# Read back — returns None if file missing or corrupt
 data = atomic_read("state/config.json")
-print(data["_written_at"])  # "2026-04-12T15:30:00+00:00"
+print(data["_written_at"])  # "2026-04-12T15:30:00+00:00" (auto-injected)
+print(data["version"])      # 3
+
+atomic_read("missing.json") # => None (never raises)
 ```
+
+## Why Not Just json.dump()?
+
+You could write this in 20 minutes. But you will get at least one of these wrong:
+
+- **`flush()` is not enough** -- data can sit in the OS buffer after flush. `fsync()` forces it to the physical disk. Without fsync, a power failure loses your data.
+- **`os.rename()` fails on Windows** if the target exists. `os.replace()` is atomic on both NTFS and POSIX. Most "atomic write" snippets on Stack Overflow use `os.rename()` and silently break on Windows.
+- **Temp file in the same directory** -- `os.replace()` across filesystems (e.g., `/tmp` to `/data`) fails silently or raises on some systems. The temp file must be on the same mount.
+- **Parent directory creation** -- `atomic_write` creates intermediate directories. `json.dump()` to a new path raises `FileNotFoundError`.
+
+These are non-obvious. Most implementations miss at least one.
 
 ## API
 
-### `atomic_write(filepath, data, indent=2, metadata=True)`
+| Function | Purpose |
+|----------|---------|
+| `atomic_write(filepath, data, indent=2, metadata=True)` | Write dict as JSON atomically; creates parent dirs |
+| `atomic_read(filepath)` | Read JSON file; returns `None` if missing or corrupt |
 
-Write a dict as JSON atomically. Creates parent directories if needed.
+### How It Works
 
-- `filepath` — target file path
-- `data` — dict to serialize
-- `indent` — JSON indentation (default 2)
-- `metadata` — inject `_written_at` ISO timestamp (default True)
+1. Write to a temp file **in the same directory** as the target
+2. `fsync()` the file descriptor to force OS buffer to disk
+3. `os.replace()` atomically swaps temp file into target path
+4. On failure, temp file is cleaned up -- target is untouched
 
-Returns the filepath. Raises `OSError` on failure.
+### Metadata
 
-### `atomic_read(filepath)`
+By default, `_written_at` (ISO timestamp) is injected into the output. Disable with `metadata=False`:
 
-Read a JSON file safely. Returns `None` if file is missing or corrupt. Never raises exceptions.
+```python
+atomic_write("clean.json", {"pure": "data"}, metadata=False)
+```
 
-## How It Works
+## Limitations
 
-1. Write to a temporary file in the **same directory** as the target
-2. `fsync` the file descriptor to force the OS to flush to disk
-3. `os.replace()` atomically swaps the temp file into the target path
-4. On failure, the temp file is cleaned up — the target is untouched
+- **Not suitable for files larger than RAM** -- entire dict is serialized in memory before writing
+- **Last-writer-wins** -- no file locking; concurrent writers will overwrite each other (but never corrupt)
+- **No partial updates** -- rewrites the entire file every time
+- **Dict only** -- top-level value must be a dict (not a list or scalar)
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for design decisions.
+## See Also
+
+- [halt-sentinel](https://github.com/protectyr-labs/halt-sentinel) -- emergency stop using atomic file writes
 
 ## License
 
-MIT — extracted from Protectyr Labs' production systems.
+MIT
