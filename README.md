@@ -8,6 +8,15 @@
 
 `json.dump()` can leave a corrupt file if the process dies mid-write. This writes to a temp file, fsyncs to disk, and atomically replaces the target. The file is always valid JSON or the previous version -- never partial.
 
+
+## Use Cases
+
+**Agent state persistence** -- Your AI agent writes its state to a JSON file between runs. If the process crashes mid-write, the state file must not be corrupted.
+
+**Configuration hot-reload** -- Multiple processes read a shared config file. When updating, the file must be either the old version or the complete new version -- never partial.
+
+**Pipeline checkpointing** -- A data pipeline saves progress to JSON after each stage. If the pipeline crashes, it can resume from the last valid checkpoint.
+
 ## Quick Start
 
 ```bash
